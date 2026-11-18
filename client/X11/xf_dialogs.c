@@ -414,9 +414,17 @@ static BOOL dlg_create_window(xfDlg* st, const char* title, int width, int heigh
 	XSetWMNormalHints(display, st->window, &hints);
 
 	XMapRaised(display, st->window);
-	XSetInputFocus(display, st->window, RevertToParent, CurrentTime);
 	st->dirty = TRUE;
 	return TRUE;
+}
+
+/* Give the keyboard focus to the dialog once the server reports it mapped, an earlier
+ * request is rejected with BadMatch because the window is not viewable yet.
+ */
+static void dlg_on_mapped(xfDlg* st)
+{
+	XSetInputFocus(st->display, st->window, RevertToParent, CurrentTime);
+	st->dirty = TRUE;
 }
 
 static void dlg_close(xfDlg* st)
@@ -646,6 +654,11 @@ int xf_xlib_authenticate_dialog(Display* display, const char* title, const char*
 			case Expose:
 				if (ev.xexpose.count == 0)
 					st.dirty = TRUE;
+				break;
+
+			case MapNotify:
+				/* drawing does not depend only on Expose, the map is enough to repaint */
+				dlg_on_mapped(&st);
 				break;
 
 			case ClientMessage:
@@ -996,6 +1009,11 @@ int xf_xlib_certificate_dialog(Display* display, const char* title, const char* 
 			case Expose:
 				if (ev.xexpose.count == 0)
 					st.dirty = TRUE;
+				break;
+
+			case MapNotify:
+				/* drawing does not depend only on Expose, the map is enough to repaint */
+				dlg_on_mapped(&st);
 				break;
 
 			case ClientMessage:
