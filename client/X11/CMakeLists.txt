@@ -53,6 +53,8 @@ set(SRCS
     xf_debug.h
     xf_event.c
     xf_event.h
+    xf_dialogs.c
+    xf_dialogs.h
     xf_floatbar.c
     xf_floatbar.h
     xf_input.c
