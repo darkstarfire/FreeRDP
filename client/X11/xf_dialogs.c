@@ -31,6 +31,7 @@
 
 #include <freerdp/settings.h>
 #include <freerdp/log.h>
+#include <freerdp/crypto/certificate.h>
 
 #include "xfreerdp.h"
 #include "xf_dialogs.h"
@@ -45,7 +46,8 @@
 #define DLG_FIELD_H 24
 
 #define DLG_AUTH_WIDTH 460
-#define DLG_CERT_WIDTH 640
+#define DLG_CERT_WIDTH 560
+#define DLG_CERT_LABEL_W 140
 
 /* Field indices of the authentication dialog, buttons come after them */
 #define AUTH_FIELD_USER 0
@@ -377,7 +379,7 @@ static BOOL dlg_create_window(xfDlg* st, const char* title, int width, int heigh
 	                   PointerMotionMask | StructureNotifyMask;
 
 	const int x = (XDisplayWidth(display, st->screen) - width) / 2;
-	const int y = (XDisplayHeight(display, st->screen) - height) / 3;
+	const int y = (XDisplayHeight(display, st->screen) - height) / 2;
 	st->window = XCreateWindow(display, root, x > 0 ? x : 0, y > 0 ? y : 0, (unsigned int)width,
 	                           (unsigned int)height, 1, CopyFromParent, InputOutput, CopyFromParent,
 	                           CWBackPixel | CWEventMask, &attrs);
@@ -885,8 +887,8 @@ static void cert_draw(const xfDlg* st, const xfDlgLines* heading, const xfDlgLin
 
 		for (size_t r = 0; r < nrows; r++, vi++)
 		{
-			dlg_text(st, st->buffer, DLG_MARGIN + 150, y + (int)r * lh, values->lines[vi],
-			         strlen(values->lines[vi]));
+			dlg_text(st, st->buffer, DLG_MARGIN + DLG_CERT_LABEL_W, y + (int)r * lh,
+			         values->lines[vi], strlen(values->lines[vi]));
 		}
 		y += (int)nrows * lh + 6;
 	}
@@ -901,7 +903,7 @@ static int cert_layout(const xfDlg* st, const xfDialogField* fields, size_t coun
                        xfDlgLines* ll, xfDlgLines* vl, size_t* rows, int* out_height)
 {
 	const int inner = DLG_CERT_WIDTH - 2 * DLG_MARGIN;
-	const int value_w = inner - 150;
+	const int value_w = inner - DLG_CERT_LABEL_W;
 	int y = DLG_MARGIN;
 
 	if (!dlg_wrap(st->fs, heading, inner, hl))
@@ -961,9 +963,9 @@ int xf_xlib_certificate_dialog(Display* display, const char* title, const char* 
 	BOOL done = FALSE;
 	int rc = XF_DIALOG_UNAVAILABLE;
 	xfDlgButton buttons[3] = {
-		{ "Aceitar Sempre", 1, 0, 0, 170, DLG_BUTTON_H },
-		{ "Aceitar Uma Vez", 2, 0, 0, 170, DLG_BUTTON_H },
-		{ "Recusar", 0, 0, 0, 170, DLG_BUTTON_H },
+		{ "Aceitar Sempre", 1, 0, 0, 160, DLG_BUTTON_H },
+		{ "Aceitar Uma Vez", 2, 0, 0, 160, DLG_BUTTON_H },
+		{ "Recusar", 0, 0, 0, 160, DLG_BUTTON_H },
 	};
 
 	if (!display || !fields || (count == 0))
@@ -994,7 +996,7 @@ int xf_xlib_certificate_dialog(Display* display, const char* title, const char* 
 
 	for (int i = 0; i < 3; i++)
 	{
-		buttons[i].x = DLG_CERT_WIDTH - DLG_MARGIN - (3 - i) * 180 + 10;
+		buttons[i].x = DLG_CERT_WIDTH - DLG_MARGIN - (3 - i) * 170 + 10;
 		buttons[i].y = height - DLG_MARGIN - DLG_BUTTON_H;
 	}
 
@@ -1125,6 +1127,27 @@ out:
 
 /* ---------- FreeRDP callbacks ---------- */
 
+/* The core passes the whole PEM when VERIFY_CERT_FLAG_FP_IS_PEM is set, show its SHA-256
+ * instead, it is short enough to compare. Returns a newly allocated string, or NULL if the
+ * value is not a PEM, the caller then shows the value as it was received.
+ */
+static char* dlg_fingerprint(const char* value, DWORD flags)
+{
+	rdpCertificate* cert = nullptr;
+	char* fp = nullptr;
+
+	if (!value || !(flags & VERIFY_CERT_FLAG_FP_IS_PEM))
+		return nullptr;
+
+	cert = freerdp_certificate_new_from_pem(value);
+	if (!cert)
+		return nullptr;
+
+	fp = freerdp_certificate_get_fingerprint_by_hash_ex(cert, "SHA256", TRUE);
+	freerdp_certificate_free(cert);
+	return fp;
+}
+
 static BOOL dialogs_available(const xfContext* xfc)
 {
 	if (!xfc || !xfc->display)
@@ -1183,13 +1206,18 @@ static BOOL dialog_authenticate_ex(freerdp* instance, char** username, char** pa
 		return TRUE;
 
 	if (!dialogs_available(xfc))
+	{
+		WLog_INFO(TAG, "credentials dialog not available, using the previous callback");
 		return dialog_fallback_authenticate(instance, username, password, domain, reason);
+	}
 
 	server = freerdp_settings_get_server_name(xfc->common.context.settings);
 	(void)snprintf(title, sizeof(title), "Credenciais necessarias para %s",
 	               server ? server : "servidor");
 
+	WLog_DBG(TAG, "showing credentials dialog for %s", server ? server : "server");
 	rc = xf_xlib_authenticate_dialog(xfc->display, title, *username, *domain, &u, &p, &d);
+	WLog_DBG(TAG, "credentials dialog result %d", rc);
 	if (rc == XF_DIALOG_UNAVAILABLE)
 		return dialog_fallback_authenticate(instance, username, password, domain, reason);
 	if (rc != 1)
@@ -1224,10 +1252,12 @@ static DWORD dialog_verify_certificate_ex(freerdp* instance, const char* host, U
 	const char* warning = "O certificado nao pode ser verificado. Ele pode ser autoassinado, "
 	                      "estar expirado ou nao ter a CA na loja de confianca.";
 	xfDialogField fields[5] = { 0 };
+	char* fp = nullptr;
 	int rc = 0;
 
 	if (!dialogs_available(xfc))
 	{
+		WLog_INFO(TAG, "certificate dialog not available, using the previous callback");
 		if (!xfc->fallbackVerifyCertificateEx)
 			return 0;
 		return xfc->fallbackVerifyCertificateEx(instance, host, port, common_name, subject, issuer,
@@ -1238,6 +1268,7 @@ static DWORD dialog_verify_certificate_ex(freerdp* instance, const char* host, U
 	(void)snprintf(heading, sizeof(heading), "Novo certificado (%s) para %s:%" PRIu16,
 	               cert_type(flags), host, port);
 	(void)snprintf(hostport, sizeof(hostport), "%s:%" PRIu16, host, port);
+	fp = dlg_fingerprint(fingerprint, flags);
 
 	fields[0].label = "Servidor";
 	fields[0].value = hostport;
@@ -1247,11 +1278,14 @@ static DWORD dialog_verify_certificate_ex(freerdp* instance, const char* host, U
 	fields[2].value = subject;
 	fields[3].label = "Emissor";
 	fields[3].value = issuer;
-	fields[4].label = "Impressao digital";
-	fields[4].value = fingerprint;
+	fields[4].label = "SHA-256";
+	fields[4].value = fp ? fp : fingerprint;
 
+	WLog_DBG(TAG, "showing certificate dialog for %s:%" PRIu16, host, port);
 	rc = xf_xlib_certificate_dialog(xfc->display, title, heading, warning, fields,
 	                                ARRAYSIZE(fields));
+	WLog_DBG(TAG, "certificate dialog result %d", rc);
+	free(fp);
 	if (rc == XF_DIALOG_UNAVAILABLE)
 	{
 		if (!xfc->fallbackVerifyCertificateEx)
@@ -1276,10 +1310,13 @@ static DWORD dialog_verify_changed_certificate_ex(freerdp* instance, const char*
 	    "O certificado deste servidor MUDOU desde a ultima conexao. Isso pode indicar uma "
 	    "adulteracao. Confirme com o administrador do servidor antes de aceitar.";
 	xfDialogField fields[8] = { 0 };
+	char* fp_new = nullptr;
+	char* fp_old = nullptr;
 	int rc = 0;
 
 	if (!dialogs_available(xfc))
 	{
+		WLog_INFO(TAG, "changed certificate dialog not available, using the previous callback");
 		if (!xfc->fallbackVerifyChangedCertificateEx)
 			return 0;
 		return xfc->fallbackVerifyChangedCertificateEx(instance, host, port, common_name, subject,
@@ -1291,6 +1328,8 @@ static DWORD dialog_verify_changed_certificate_ex(freerdp* instance, const char*
 	(void)snprintf(heading, sizeof(heading), "Certificado alterado (%s) para %s:%" PRIu16,
 	               cert_type(flags), host, port);
 	(void)snprintf(hostport, sizeof(hostport), "%s:%" PRIu16, host, port);
+	fp_new = dlg_fingerprint(new_fingerprint, flags);
+	fp_old = dlg_fingerprint(old_fingerprint, flags);
 
 	fields[0].label = "Servidor";
 	fields[0].value = hostport;
@@ -1300,17 +1339,21 @@ static DWORD dialog_verify_changed_certificate_ex(freerdp* instance, const char*
 	fields[2].value = subject;
 	fields[3].label = "Novo emissor";
 	fields[3].value = issuer;
-	fields[4].label = "Nova impressao digital";
-	fields[4].value = new_fingerprint;
+	fields[4].label = "Nova SHA-256";
+	fields[4].value = fp_new ? fp_new : new_fingerprint;
 	fields[5].label = "Assunto anterior";
 	fields[5].value = old_subject;
 	fields[6].label = "Emissor anterior";
 	fields[6].value = old_issuer;
-	fields[7].label = "Impressao anterior";
-	fields[7].value = old_fingerprint;
+	fields[7].label = "SHA-256 anterior";
+	fields[7].value = fp_old ? fp_old : old_fingerprint;
 
+	WLog_DBG(TAG, "showing certificate dialog for %s:%" PRIu16, host, port);
 	rc = xf_xlib_certificate_dialog(xfc->display, title, heading, warning, fields,
 	                                ARRAYSIZE(fields));
+	WLog_DBG(TAG, "certificate dialog result %d", rc);
+	free(fp_new);
+	free(fp_old);
 	if (rc == XF_DIALOG_UNAVAILABLE)
 	{
 		if (!xfc->fallbackVerifyChangedCertificateEx)
