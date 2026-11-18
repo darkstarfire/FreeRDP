@@ -104,6 +104,7 @@
 #include "xf_graphics.h"
 #include "xf_keyboard.h"
 #include "xf_channels.h"
+#include "xf_dialogs.h"
 #include "xf_client.h"
 #include "xfreerdp.h"
 #include "xf_utils.h"
@@ -1187,6 +1188,10 @@ static BOOL xf_pre_connect(freerdp* instance)
 		if (!xf_setup_x11(xfc))
 			return FALSE;
 	}
+
+	/* after the defaults are set, the dialogs fall back to them when no display is usable */
+	if (!xf_dialogs_install(xfc))
+		return FALSE;
 
 	if (!freerdp_settings_set_uint32(settings, FreeRDP_OsMajorType, OSMAJORTYPE_UNIX))
 		return FALSE;

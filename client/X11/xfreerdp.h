@@ -339,6 +339,11 @@ struct xf_context
 	bool exposeRequested;
 	GDI_RGN exposedArea;
 	Window exposedWindow;
+
+	/* callbacks replaced by the X11 dialogs, used when no dialog can be shown */
+	pAuthenticateEx fallbackAuthenticateEx;
+	pVerifyCertificateEx fallbackVerifyCertificateEx;
+	pVerifyChangedCertificateEx fallbackVerifyChangedCertificateEx;
 };
 
 BOOL xf_create_window(xfContext* xfc);
